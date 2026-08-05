@@ -1,0 +1,55 @@
+name: Release Cargoship package
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install The Latest Release Version of cargoship
+        uses: colonel-byte/setup-cargoship@main
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Package Cargoship package
+        run: |-
+          cargoship create --output . --confirm .
+
+      - name: Publish Cargoship package
+        env:
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+        run: |-
+          cargoship publish cargoship-*.zst \
+            oci://ghcr.io/${{ github.repository_owner }}/cargoship \
+            --signing-key env://COSIGN_KEY \
+            --signing-key-pass ${{ secrets.COSIGN_PASS }} \
+            --key https://raw.githubusercontent.com/colonel-byte/zarf-slim-init/refs/heads/main/cosign.pub

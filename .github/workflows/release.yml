@@ -44,6 +44,10 @@ jobs:
         run: |-
           cargoship create --output . --confirm .
 
+      - name: Get the sha256sum of the current package
+        run: |-
+          sha256sum cargoship-*.zst
+
       - name: Publish Cargoship package
         env:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}

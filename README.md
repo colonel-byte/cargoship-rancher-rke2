@@ -40,7 +40,10 @@ Step 3 is idempotent: a push that changes neither a definition nor the registry 
 
 ## Hardening
 
-These definitions target the [Rancher Government Solutions RKE2 STIG](https://www.stigviewer.com/stigs/rancher_government_solutions_rke2), V2R7. All fifteen findings that a package definition can carry are enforced by the template; see [docs/stig-compliance.md](docs/stig-compliance.md) for the finding-by-finding mapping, the six that no definition can assert, and the one open gap (V-268321, Carbide image provenance).
+These definitions target the [Rancher Government Solutions RKE2 STIG](https://www.stigviewer.com/stigs/rancher_government_solutions_rke2), V2R7 (2026-05-13). All fifteen findings that a package definition can carry are enforced by the template.
+
+- [docs/stig-compliance.md](docs/stig-compliance.md) - the finding-by-finding mapping, the six findings no definition can assert, and the one open gap (V-268321, Carbide image provenance)
+- [docs/stig-maintenance.md](docs/stig-maintenance.md) - how to re-review the mapping when DISA publishes a new release, since nothing here notices that on its own
 
 ## Requirements
 

@@ -11,7 +11,7 @@ Fifteen of the 21 are settings a package definition can carry. All fifteen are s
 | V-254562 | CAT I  | `anonymous-auth=false`                                                                                                                                    | `kube-apiserver-arg`                                                      |
 | V-254561 | CAT I  | `authorization-mode=Webhook`                                                                                                                              | `kubelet-arg`                                                             |
 | V-254559 | CAT I  | `read-only-port=0`                                                                                                                                        | `kubelet-arg`                                                             |
-| V-254553 | CAT I  | `tls-min-version` >= `VersionTLS12` and a cipher list containing the three required ECDSA suites, on the apiserver, controller manager and scheduler      | `kube-apiserver-arg`, `kube-controller-manager-arg`, `kube-scheduler-arg` |
+| V-254553 | CAT I  | `tls-min-version` >= `VersionTLS12` and the three named ECDSA cipher suites, on the apiserver, controller manager and scheduler      | `kube-apiserver-arg`, `kube-controller-manager-arg`, `kube-scheduler-arg` |
 | V-254554 | CAT II | `use-service-account-credentials=true`                                                                                                                    | `kube-controller-manager-arg`                                             |
 | V-254555 | CAT II | `audit-policy-file` set, `audit-log-mode=blocking-strict`, `profile: cis`, and an audit policy of secrets at `Metadata` / everything at `RequestResponse` | `audit:`, `kube-apiserver-arg`, `profile`                                 |
 | V-254556 | CAT II | `bind-address=127.0.0.1`                                                                                                                                  | `kube-controller-manager-arg`                                             |
@@ -28,7 +28,9 @@ Two of these are satisfied indirectly, and it is worth knowing how. cargoship tu
 
 ## What was changed to reach this
 
-One finding, **V-254555**. The definition carried:
+### V-254555: the audit policy logged nothing
+
+The definition carried:
 
 ```yaml
 audit:
@@ -39,6 +41,20 @@ audit:
 `level: None` matches every request and logs none of it, so the cluster satisfied the parts of V-254555 that ask for `audit-policy-file` and `audit-log-mode` while auditing nothing at all. It now carries the policy the STIG's check text requires verbatim.
 
 **This is loud.** `RequestResponse` on `*` logs full request and response bodies for every resource. Size `/var/lib/rancher/rke2/server/logs` accordingly, and expect the audit log to dominate control-plane disk I/O on a busy cluster. That cost is what the requirement buys, and it is not tunable without taking the finding.
+
+### V-254553: the cipher list is now exactly the three the STIG names
+
+The check text asks only that the list *contain* the three suites, so a longer list also passes. This repository carries exactly the three:
+
+```text
+TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+```
+
+Three `TLS_ECDHE_RSA_*` suites were dropped to get here. That is safe on a default cluster, and worth understanding before you supply your own PKI: a TLS 1.2 cipher suite names the authentication algorithm, so an ECDSA-only list can only serve a certificate with an EC key. RKE2 generates its leaf CAs - `server-ca`, `client-ca`, `request-header-ca` and the etcd pair - as ECDSA P-256, and the serving certificates they sign inherit that, so the three suites above negotiate normally. Only `root-ca`, `intermediate-ca` and `service.key` are RSA, and none of those terminates TLS.
+
+**A custom PKI whose leaf CAs are RSA will fail to serve TLS 1.2 at all** - there would be no mutually acceptable suite, rather than a weaker one. If you adapt `generate-custom-ca-certs.sh`, keep the leaf CAs on `prime256v1`. TLS 1.3 is unaffected either way: its suite names carry no authentication algorithm, and Go does not let `tls-cipher-suites` configure them.
 
 ## Findings no definition can assert
 

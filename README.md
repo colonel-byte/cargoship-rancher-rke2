@@ -38,6 +38,10 @@ Normally nobody runs either by hand: [`render.yaml`](.github/workflows/render.ya
 
 Step 3 is idempotent: a push that changes neither a definition nor the registry publishes nothing, and a version whose push failed is picked up by the next run.
 
+## Hardening
+
+These definitions target the [Rancher Government Solutions RKE2 STIG](https://www.stigviewer.com/stigs/rancher_government_solutions_rke2), V2R7. All fifteen findings that a package definition can carry are enforced by the template; see [docs/stig-compliance.md](docs/stig-compliance.md) for the finding-by-finding mapping, the six that no definition can assert, and the one open gap (V-268321, Carbide image provenance).
+
 ## Requirements
 
 `cargoship` v0.39.0 or newer, for `cargoship dev render`. CI pins it through the `CARGOSHIP_VERSION` repository variable.

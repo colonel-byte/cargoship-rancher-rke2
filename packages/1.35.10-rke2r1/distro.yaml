@@ -72,9 +72,28 @@ spec:
         service-cidr: 10.43.0.0/16
         write-kubeconfig-mode: "0600"
         # keep-sorted end
+      # STIG V-254555 (CNTR-R2-000* / CAT II). cargoship writes this to
+      # /etc/rancher/rke2/audit.yaml and points kube-apiserver's audit-policy-file at it,
+      # adding "kind: Policy" and "apiVersion: audit.k8s.io/v1" itself.
+      #
+      # The rules are the ones the STIG's check text requires verbatim: secrets at Metadata so
+      # their contents never reach the log, everything else at RequestResponse. This is loud --
+      # RequestResponse on every resource logs full request and response bodies -- which is the
+      # cost the requirement accepts. Size the audit log volume for it.
       audit:
+        metadata:
+          name: rke2-audit-policy
         rules:
-          - level: None
+          - level: Metadata
+            resources:
+              - group: ""
+                resources:
+                  - secrets
+          - level: RequestResponse
+            resources:
+              - group: ""
+                resources:
+                  - "*"
       podSecurity:
         plugins:
           - name: PodSecurity

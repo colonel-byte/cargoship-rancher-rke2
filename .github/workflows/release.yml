@@ -1,30 +1,156 @@
+---
 name: Release Cargoship package
 
+# Publishes every definition under packages/ that the registry does not already hold.
+#
+# Neither the version nor the package name is a pin. cargoship publish derives its reference
+# from the definition itself -- <registry>/<metadata.name>:<metadata.version> -- so the probe
+# below and the push agree by construction, and adding a version is adding a directory rather
+# than editing this file.
+#
+# Rendering is not part of this. render.yaml opens a pull request with whatever upstream moved;
+# this workflow reads whatever was merged.
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Package version to publish, e.g. 1.37.2-rke2r1. Empty publishes every version the
+          registry does not already hold; naming one publishes it whether or not it is there.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+env:
+  # The namespace cargoship publishes into, and the packages API path for the same place.
+  # Spelled out separately because one env entry cannot read another.
+  REGISTRY: oci://ghcr.io/colonel-byte/cargoship
+  PACKAGE_PATH: cargoship%2Francher-rke2
 
 jobs:
-  release:
+  # Decides what to publish before anything is built, because deciding costs one API call and
+  # building costs gigabytes. A push that touched only the README ends here.
+  select:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
+      packages: read
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      count: ${{ steps.select.outputs.count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select the versions to publish
+        id: select
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WANTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # One call for every tag on the package, rather than one call per version. A package
+          # that has never been published 404s, which answers the question the same way.
+          #
+          # An API call that fails for any other reason reads as "nothing is published" and
+          # everything is pushed again. That costs a republish of content the registry already
+          # holds, which is the harmless way to be wrong here -- the alternative is skipping a
+          # version that genuinely moved and only noticing at the next release.
+          published=$(
+            gh api --paginate \
+              "/orgs/colonel-byte/packages/container/$PACKAGE_PATH/versions?per_page=100" \
+              --jq '.[].metadata.container.tags[]' 2>/dev/null || true
+          )
+
+          {
+            echo "## Versions selected"
+            echo
+            echo "| Version | Reference | Decision |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          : > /tmp/entries.jsonl
+          for dir in packages/*/; do
+            dir=${dir%/}
+            [ -f "$dir/distro.yaml" ] || continue
+
+            name=$(yq -r '.metadata.name' "$dir/distro.yaml")
+            version=$(yq -r '.metadata.version' "$dir/distro.yaml")
+            if [ -z "$name" ] || [ "$name" = null ] || [ -z "$version" ] || [ "$version" = null ]; then
+              echo "no metadata.name or metadata.version in $dir/distro.yaml" >&2
+              exit 1
+            fi
+
+            # A named version is a request to publish it regardless of the registry.
+            if [ -n "$WANTED" ]; then
+              if [ "$version" != "$WANTED" ]; then
+                continue
+              fi
+            elif grep -Fxq "$version" <<< "$published"; then
+              echo "$version: $name:$version already published, skipping"
+              echo "| \`$version\` | \`$name:$version\` | already published |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            echo "$version: publishing $dir as $name:$version"
+            echo "| \`$version\` | \`$name:$version\` | publishing |" >> "$GITHUB_STEP_SUMMARY"
+            jq -nc --arg dir "$dir" --arg name "$name" --arg version "$version" '$ARGS.named' \
+              >> /tmp/entries.jsonl
+          done
+
+          matrix=$(jq -sc '{include: .}' /tmp/entries.jsonl)
+          count=$(jq -r '.include | length' <<< "$matrix")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+          if [ "$count" -eq 0 ]; then
+            if [ -n "$WANTED" ]; then
+              echo "no package under packages/ declares version $WANTED" >&2
+              exit 1
+            fi
+            echo "| _none_ | | every version is already published |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish:
+    needs: select
+    if: needs.select.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # One job per version rather than one job building all of them: each pulls its whole image
+    # list and its RPMs, and the lines share no image tags, so there is no cache to hit by
+    # running them together -- only one disk to fill.
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    permissions:
+      contents: write
       id-token: write
       packages: write
+    # Never two runs racing to the same reference.
+    concurrency:
+      group: publish-${{ matrix.version }}
+      cancel-in-progress: false
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Install The Latest Release Version of cargoship
-        uses: colonel-byte/setup-cargoship@main
+      - name: Install cargoship
+        uses: colonel-byte/setup-cargoship@4da2adc72270551216e4c58daae04ea8e3391948 # v1.0.0
+        with:
+          version: ${{ vars.CARGOSHIP_VERSION }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -33,6 +159,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The images a definition declares are all docker.io/rancher/*, and an unauthenticated
+      # runner hits Docker Hub's rate limit partway through a 26 image pull.
       - name: Login to Docker hub
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -41,23 +169,47 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Package Cargoship package
-        run: |-
-          cargoship create --output . --confirm .
+        env:
+          DIR: ${{ matrix.dir }}
+        run: cargoship create --output . --confirm "$DIR"
 
-      - name: Get the sha256sum of the current package
-        run: |-
+      - name: Report what was built
+        run: |
+          set -euo pipefail
           sha256sum cargoship-*.zst
-
-      - name: Get the sha256sum of the current package
-        run: |-
           tar -tf cargoship-*.zst
 
       - name: Publish Cargoship package
         env:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
-        run: |-
-          cargoship publish cargoship-*.zst \
-            oci://ghcr.io/${{ github.repository_owner }}/cargoship \
+          # Through env rather than interpolated into the run block: a secret spliced into a
+          # shell command line is readable by anything that can list processes on the runner.
+          COSIGN_PASS: ${{ secrets.COSIGN_PASS }}
+        run: |
+          set -euo pipefail
+
+          cargoship publish cargoship-*.zst "$REGISTRY" \
             --signing-key env://COSIGN_KEY \
-            --signing-key-pass ${{ secrets.COSIGN_PASS }} \
+            --signing-key-pass "$COSIGN_PASS" \
             --key https://raw.githubusercontent.com/colonel-byte/zarf-slim-init/refs/heads/main/cosign.pub
+
+      # A record of what shipped, not a trigger: the tag is written from a publish that already
+      # succeeded. Path-prefixed so every version has its own and they coexist, and skipped
+      # rather than failed if it exists, since a deliberate republish of one version should not
+      # fail on its tag.
+      - name: Tag what shipped
+        env:
+          TAG: rancher-rke2/${{ matrix.version }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists, leaving it alone"
+            exit 0
+          fi
+
+          git config user.name "cargoship-bot"
+          git config user.email "cargoship-bot@users.noreply.github.com"
+          git tag --annotate "$TAG" --message "rancher-rke2 $VERSION published to ghcr.io"
+          git push origin "refs/tags/$TAG"

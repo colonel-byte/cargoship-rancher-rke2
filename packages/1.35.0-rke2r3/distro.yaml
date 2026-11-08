@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# This file is generated from templates/distro.yaml.tmpl by .github/workflows/render.yaml.
+# Edit the template or versions/<version>.yaml, not this file.
+
 ---
 # yaml-language-server: $schema=https://raw.githubusercontent.com/colonel-byte/cargoship/refs/heads/main/schema/distro-v1alpha1-schema.json
-apiVersion: zarf.dev/v1alpha1
-kind: ZarfDistro
+apiVersion: colonel-byte.dev/v1alpha1
+kind: Distro
 metadata:
   name: rancher-rke2
   version: 1.35.0-rke2r3
@@ -141,25 +144,40 @@ spec:
       files:
         - source: https://rpm.rancher.io/rke2/latest/1.35/centos/9/x86_64/rke2-common-1.35.0~rke2r3-0.el9.x86_64.rpm
           target: /var/lib/rancher/rke2/rpm/rke2-common-1.35.0~rke2r3-0.el9.x86_64.rpm
+          shasum: a015d6c6c4ced0dd8f03b1aff1822398dfc7c2abd71e07270ae294d40e028908
           selector:
             package: rpm
-        - source: https://rpm.rancher.io/rke2/latest/common/centos/9/noarch/rke2-selinux-0.22-1.el9.noarch.rpm
-          target: /var/lib/rancher/rke2/rpm/rke2-selinux-0.22-1.el9.noarch.rpm
+        - source: https://rpm.rancher.io/rke2/latest/common/centos/9/noarch/rke2-selinux-0.24-1.el9.noarch.rpm
+          target: /var/lib/rancher/rke2/rpm/rke2-selinux-0.24-1.el9.noarch.rpm
+          shasum: 6f813a0c8678fb3ea9978131028d0ce58ba355ac0b909422cef0f51bcb7c2a03
           selector:
             package: rpm
         - source: https://rpm.rancher.io/rke2/latest/1.35/centos/9/x86_64/rke2-server-1.35.0~rke2r3-0.el9.x86_64.rpm
           target: /var/lib/rancher/rke2/rpm/rke2-server-1.35.0~rke2r3-0.el9.x86_64.rpm
+          shasum: 0af35ba900c40a2f2f8ffeb43f1cdcdc1e247b22aa9ddf8592a1f8b1ac2fa084
           selector:
             package: rpm
             profile: controller
         - source: https://rpm.rancher.io/rke2/latest/1.35/centos/9/x86_64/rke2-agent-1.35.0~rke2r3-0.el9.x86_64.rpm
           target: /var/lib/rancher/rke2/rpm/rke2-agent-1.35.0~rke2r3-0.el9.x86_64.rpm
+          shasum: a985fa9dcd5627dc7fe34c743c2f38844ea9e8a73af31463ad4454e149dc8316
           selector:
             package: rpm
             profile: worker
     files:
       - source: core/cache.json
         target: /var/lib/rancher/rke2/agent/images/.cache.json
+      # rke2 ships no etcdctl, which is the tool you want on a control-plane node when etcd is
+      # the thing that is wrong. The version tracks the hardened-etcd image this release
+      # bundles, so the client matches the server. Phase 50 uploads it and no later phase
+      # renames it, so it is in place as soon as the upload finishes.
+      - source: https://github.com/etcd-io/etcd/releases/download/v3.6.7/etcd-v3.6.7-linux-amd64.tar.gz
+        extractPath: etcd-v3.6.7-linux-amd64/etcdctl
+        target: /usr/local/bin/etcdctl
+        executable: true
+        shasum: cf8af880c5a01ee5363cefa14a3e0cb7e5308dcf4ed17a6973099c9a7aee5a9a
+        selector:
+          profile: controller
     imageConfig:
       path: /var/lib/rancher/rke2/agent/images
       compression: none

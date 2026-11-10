@@ -189,10 +189,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          cargoship publish cargoship-*.zst "$REGISTRY" \
+          # No --key: that validates a signature on the package being published, and the
+          # package created a step earlier is unsigned. --signing-key is what signs it here.
+          cargoship publish cargoship-*.zst "$REGISTRY" --confirm \
             --signing-key env://COSIGN_KEY \
-            --signing-key-pass "$COSIGN_PASS" \
-            --key https://raw.githubusercontent.com/colonel-byte/zarf-slim-init/refs/heads/main/cosign.pub
+            --signing-key-pass "$COSIGN_PASS"
 
       # A record of what shipped, not a trigger: the tag is written from a publish that already
       # succeeded. Path-prefixed so every version has its own and they coexist, and skipped

@@ -61,7 +61,8 @@ jobs:
       - name: Setup cargoship
         uses: colonel-byte/setup-cargoship@4da2adc72270551216e4c58daae04ea8e3391948 # v1.0.0
         with:
-          version: ${{ vars.CARGOSHIP_VERSION }}
+          # renovate: datasource=github-releases depName=colonel-byte/cargoship
+          version: v0.40.0
 
       # The half that cannot be derived from the inputs: deciding that upstream has cut a
       # release the inputs do not mention yet. A revision upstream has retired keeps its git

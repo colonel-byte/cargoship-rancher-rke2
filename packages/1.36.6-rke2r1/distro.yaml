@@ -184,7 +184,7 @@ spec:
             package: rpm
             profile: worker
     files:
-      - source: core/cache.json
+      - source: ../../core/cache.json
         target: /var/lib/rancher/rke2/agent/images/.cache.json
       # rke2 ships no etcdctl, which is the tool you want on a control-plane node when etcd is
       # the thing that is wrong. The version tracks the hardened-etcd image this release
@@ -194,7 +194,7 @@ spec:
         extractPath: etcd-v3.6.14-linux-amd64/etcdctl
         target: /usr/local/bin/etcdctl
         executable: true
-        shasum: ffe840ff9295808e88cce2794a18a5ac87f12a5203c8314d0bf6aa119b41bac5
+        shasum: dba085f02f045d6fc0cd59c533ef2a8dc922ad82418c0e538b194525c715450b
         selector:
           profile: controller
     imageConfig:

@@ -8,7 +8,7 @@ selinux:
   shasum: 6f813a0c8678fb3ea9978131028d0ce58ba355ac0b909422cef0f51bcb7c2a03
 etcd:
   version: 3.6.7
-  shasum: cf8af880c5a01ee5363cefa14a3e0cb7e5308dcf4ed17a6973099c9a7aee5a9a
+  shasum: a14e39a212e828313da156dc1c261374247cbf32a20aa8aa15e12203318d7fef
 rpms:
   common: a015d6c6c4ced0dd8f03b1aff1822398dfc7c2abd71e07270ae294d40e028908
   server: 0af35ba900c40a2f2f8ffeb43f1cdcdc1e247b22aa9ddf8592a1f8b1ac2fa084

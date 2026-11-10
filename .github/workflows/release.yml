@@ -150,7 +150,8 @@ jobs:
       - name: Install cargoship
         uses: colonel-byte/setup-cargoship@4da2adc72270551216e4c58daae04ea8e3391948 # v1.0.0
         with:
-          version: ${{ vars.CARGOSHIP_VERSION }}
+          # renovate: datasource=github-releases depName=colonel-byte/cargoship
+          version: v0.40.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0

@@ -1,0 +1,213 @@
+---
+name: Render definitions
+
+# Chases upstream rke2 and renders what it finds, opening a pull request with whatever moved.
+#
+# Everything under packages/ is generated from templates/distro.yaml.tmpl and one file per
+# version under versions/. Nothing here builds or publishes a package: a build fetches every
+# image a definition declares, which is gigabytes and the thing a hosted runner's disk runs
+# out of. release.yml picks up whatever lands on main.
+on:
+  # The trigger that matters: a template fix or a hand-written version file should reach the
+  # rendered tree in the same review cycle.
+  push:
+    branches: [main]
+    paths:
+      - templates/**
+      - versions/**
+      - hack/**
+  # Plus a floor, so a repository nobody has touched in a month is still known to be current.
+  schedule:
+    - cron: 41 6 * * 1
+  workflow_dispatch:
+
+# The pull request is pushed with a GitHub App token, not GITHUB_TOKEN, so the workflow's own
+# token needs nothing beyond reading the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: render-definitions
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    # Resolving a line hashes the RPMs it publishes -- rke2-common alone is around 29 MB --
+    # once per tracked line. Network bound, not CPU bound.
+    timeout-minutes: 30
+    env:
+      BRANCH: chore/render-definitions
+    steps:
+      # A pull request opened with GITHUB_TOKEN does not start this repository's own
+      # pull_request workflows, so a render would land with a green tick and no checks. The
+      # same app cargoship's refresh-examples.yaml uses, for the same reason.
+      - name: Get app token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_GITHUB_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_GITHUB_APP_SECRET }}
+
+      # The token goes on the checkout, not only on the gh steps: it is what leaves the
+      # pushing remote authenticated as the app, so the force push below counts as the app.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Pinned through a repository variable rather than left to resolve latest, so a render
+      # that surprises someone says which build produced it.
+      - name: Setup cargoship
+        uses: colonel-byte/setup-cargoship@4da2adc72270551216e4c58daae04ea8e3391948 # v1.0.0
+        with:
+          version: ${{ vars.CARGOSHIP_VERSION }}
+
+      # The half that cannot be derived from the inputs: deciding that upstream has cut a
+      # release the inputs do not mention yet. A revision upstream has retired keeps its git
+      # tag long after its RPMs have gone, so hack/new-version.sh probes before it writes and
+      # a line that fails is skipped rather than failing the job -- the other lines still
+      # render, and the next run picks the line up if upstream republishes.
+      - name: Chase upstream
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          while read -r line; do
+            [ -n "$line" ] || continue
+
+            tag=$(
+              gh release list --repo rancher/rke2 --limit 100 \
+                --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' |
+                grep -E "^v${line//./\\.}\.[0-9]+\+rke2r[0-9]+$" | sort -V | tail -1
+            )
+            if [ -z "$tag" ]; then
+              echo "::warning::no release found for line $line"
+              continue
+            fi
+
+            version=${tag#v}; version=${version/+/-}
+            if [ -f "versions/$version.yaml" ]; then
+              echo "$line: $tag already tracked"
+              continue
+            fi
+
+            echo "$line: $tag is new"
+            if ! ./hack/new-version.sh "$tag"; then
+              echo "::warning::$tag does not publish fetchable artifacts yet, skipping"
+            fi
+          done < <(yq -r '.lines[]' versions/tracked.yaml)
+
+      # One render per values file, so adding a version is adding a file. The rendered
+      # directory is removed first: a template that stops writing a file should stop carrying
+      # it, and an overwrite alone would leave the old one behind. No --no-validate -- the
+      # schema check is the only check this workflow gets for free.
+      - name: Render
+        run: |
+          set -euo pipefail
+
+          for input in versions/*.yaml; do
+            name=$(basename "$input" .yaml)
+            if [ "$name" = tracked ]; then
+              continue
+            fi
+
+            rm -rf "packages/$name"
+            cargoship dev render \
+              --template templates/distro.yaml.tmpl \
+              --values "$input" \
+              --out "packages/$name"
+          done
+
+      # Redundant with the render for a definition this run wrote, and not redundant for one a
+      # hand-edit reached: this is what catches the committed tree having been edited directly.
+      - name: Validate the rendered tree
+        run: cargoship validate packages/*/distro.yaml
+
+      - name: Stage what moved
+        id: changes
+        run: |
+          set -euo pipefail
+
+          git add --all -- packages versions
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing moved upstream since the last render." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --cached --stat | tail -n 20
+
+          # The version files are the readable part of the diff: they say which line moved and
+          # to what, while the rendered churn is hundreds of lines saying the same thing. They
+          # can legitimately be empty -- a template edit changes rendered output without any
+          # version moving.
+          git diff --cached --stat -- versions > /tmp/versions.diff
+          if [ ! -s /tmp/versions.diff ]; then
+            echo "(no version moved -- only rendered output changed)" > /tmp/versions.diff
+          fi
+
+      - name: Push the branch
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name "cargoship-bot"
+          git config user.email "cargoship-bot@users.noreply.github.com"
+
+          git switch --force-create "$BRANCH"
+          git commit --message "chore: re-render definitions" \
+            --message "Rendered by .github/workflows/render.yaml."
+          git push --force origin "$BRANCH"
+
+      - name: Open or update the pull request
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "Rendered by \`.github/workflows/render.yaml\`. Do not edit these files on this"
+            echo "branch -- the next run force-pushes over them. Change \`templates/distro.yaml.tmpl\`"
+            echo "or the file under \`versions/\` instead."
+            echo
+            echo "Versions that moved:"
+            echo
+            echo '```'
+            cat /tmp/versions.diff
+            echo '```'
+            echo
+            echo "Nothing is published by this pull request. \`release.yml\` publishes whatever is on"
+            echo "\`main\` that the registry does not already hold."
+          } > /tmp/pr-body.md
+
+          # An open pull request for this branch is updated in place: the force push already
+          # moved its head, so only the body needs rewriting to describe the new render.
+          number=$(
+            gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+              --limit 1 --json number --jq '.[].number'
+          )
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$REPO" --body-file /tmp/pr-body.md
+            echo "updated pull request #$number"
+          else
+            number=$(
+              gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+                --title "chore: re-render definitions" \
+                --body-file /tmp/pr-body.md
+            )
+            echo "opened $number"
+          fi
+
+          {
+            echo "## Rendered definitions"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Pull request | $number |"
+          } >> "$GITHUB_STEP_SUMMARY"

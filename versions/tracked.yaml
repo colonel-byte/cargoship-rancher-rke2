@@ -1,0 +1,8 @@
+---
+# The rke2 minor lines this repository renders. Adding one here is all it takes for
+# .github/workflows/render.yaml to start chasing it; removing one stops the chase but leaves
+# whatever is already under packages/ alone, so a line is retired by deleting both.
+lines:
+  - "1.35"
+  - "1.36"
+  - "1.37"
